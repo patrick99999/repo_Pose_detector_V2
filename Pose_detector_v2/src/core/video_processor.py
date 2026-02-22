@@ -27,6 +27,7 @@ class VideoProcessor(QThread):
     playback_finished = pyqtSignal()
     fps_updated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
+    position_changed = pyqtSignal(int)  # Emesso con l'indice del frame corrente
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -34,32 +35,32 @@ class VideoProcessor(QThread):
         self._video_path: str | None = None
         self._is_playing = False
         self._stop_requested = False
-        # Il detector NON viene creato qui: viene creato dentro run()
-        # per garantire che viva sullo stesso thread.
+        self._seek_requested = False
+        self._seek_target = 0
+        self._total_frames = 0
         self._detector: PoseDetector | None = None
 
     # ------------------------------------------------------------------
     # Public API (chiamato dal thread GUI)
     # ------------------------------------------------------------------
 
-    def load_video(self, path: str) -> tuple[bool, int, int, float]:
-        """Carica un video e restituisce (ok, width, height, fps).
-
-        Non avvia la riproduzione: usare play() dopo.
-        """
+    def load_video(self, path: str) -> tuple[bool, int, int, float, int]:
+        """Carica un video e restituisce (ok, width, height, fps, total_frames)."""
         cap = cv2.VideoCapture(path)
         if not cap.isOpened():
-            return False, 0, 0, 0.0
+            return False, 0, 0, 0.0, 0
 
         w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         cap.release()
 
         with QMutexLocker(self._mutex):
             self._video_path = path
+            self._total_frames = total_frames
 
-        return True, w, h, fps
+        return True, w, h, fps, total_frames
 
     def play(self) -> None:
         """Avvia o riprende la riproduzione."""
@@ -75,13 +76,19 @@ class VideoProcessor(QThread):
         with QMutexLocker(self._mutex):
             self._is_playing = False
 
+    def set_position(self, frame_idx: int) -> None:
+        """Richiede di saltare a un frame specifico."""
+        with QMutexLocker(self._mutex):
+            self._seek_requested = True
+            self._seek_target = frame_idx
+
     def stop_playback(self) -> None:
         """Ferma completamente la riproduzione e il thread."""
         with QMutexLocker(self._mutex):
             self._is_playing = False
             self._stop_requested = True
 
-        self.wait(3000)  # attesa massima 3 secondi per la fine del thread
+        self.wait(3000)
 
     # ------------------------------------------------------------------
     # Thread run
@@ -109,43 +116,51 @@ class VideoProcessor(QThread):
             return
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        # Limitiamo gli FPS a massimo 30 per migliorare le performance
         target_fps = min(fps, 30.0)
         frame_delay = 1.0 / target_fps
         frame_skip_ratio = fps / target_fps if fps > target_fps else 1.0
         
-        # Creo il detector qui, sullo stesso thread in cui verrà usato.
-        # MediaPipe PoseLandmarker NON è thread-safe.
         detector = PoseDetector()
 
         try:
             frame_count = 0
             while cap.isOpened():
-                # Controlla stop
+                # Controlla stop e seek
                 with QMutexLocker(self._mutex):
                     if self._stop_requested:
                         break
                     playing = self._is_playing
+                    seek_req = self._seek_requested
+                    seek_tgt = self._seek_target
+                    self._seek_requested = False
 
-                if not playing:
+                if seek_req:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, seek_tgt)
+                    frame_count = seek_tgt
+                    # Dobbiamo resettare il MediaPipe landmarker perché
+                    # c'è stato un salto temporale brusco
+                    detector.reset()
+
+                if not playing and not seek_req:
                     # In pausa: dormi un po' e ricontrolla
                     time.sleep(0.05)
                     continue
 
                 t_start = time.perf_counter()
 
-                # Saltiamo i frame in eccesso se il video originale ha più di 30 fps
-                frames_to_read = max(1, int(frame_count * frame_skip_ratio) - int((frame_count - 1) * frame_skip_ratio))
-                for _ in range(frames_to_read - 1):
-                    cap.read()  # Scarta i frame veloci
+                # Saltiamo i frame in eccesso solo se NON stiamo facendo seek manuale
+                if not seek_req and fps > target_fps:
+                    frames_to_read = max(1, int(frame_count * frame_skip_ratio) - int((frame_count - 1) * frame_skip_ratio))
+                    for _ in range(frames_to_read - 1):
+                        cap.read()
                 
                 ret, frame = cap.read()
-                frame_count += 1
-                
                 if not ret:
-                    # Il video è finito
                     self.playback_finished.emit()
                     break
+
+                frame_count = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+                self.position_changed.emit(frame_count)
 
                 # --- 1. OTTIMIZZAZIONE: Riduzione Risoluzione ---
                 # Ridimensioniamo il frame a una larghezza massima di 640px

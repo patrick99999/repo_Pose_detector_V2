@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QFileDialog,
     QStatusBar,
+    QSlider,
 )
 
 from gui.widgets.video_widget import VideoWidget
@@ -109,6 +110,38 @@ QLabel#lblFile {
     font-size: 13px;
 }
 
+QLabel#lblTime {
+    color: #e0e0e0;
+    font-size: 14px;
+    font-weight: 500;
+    min-width: 100px;
+}
+
+QSlider::groove:horizontal {
+    border: 1px solid #3a3a3a;
+    height: 6px;
+    background: #2a2a2a;
+    margin: 2px 0;
+    border-radius: 3px;
+}
+
+QSlider::handle:horizontal {
+    background: #5a9cf5;
+    border: 1px solid #5a9cf5;
+    width: 14px;
+    margin: -4px 0;
+    border-radius: 7px;
+}
+
+QSlider::handle:horizontal:hover {
+    background: #7bb4f7;
+}
+
+QSlider::sub-page:horizontal {
+    background: #1a5bbd;
+    border-radius: 3px;
+}
+
 QStatusBar {
     background-color: #1a1a1a;
     color: #888888;
@@ -131,6 +164,9 @@ class MainWindow(QMainWindow):
         # --- State ---
         self._video_loaded = False
         self._is_playing = False
+        self._total_frames = 0
+        self._fps = 30.0
+        self._slider_pressed = False
 
         # --- Core ---
         self._processor = VideoProcessor()
@@ -138,6 +174,7 @@ class MainWindow(QMainWindow):
         self._processor.playback_finished.connect(self._on_playback_finished)
         self._processor.fps_updated.connect(self._on_fps_updated)
         self._processor.error_occurred.connect(self._on_error)
+        self._processor.position_changed.connect(self._on_position_changed)
 
         # --- UI ---
         self._build_ui()
@@ -171,6 +208,24 @@ class MainWindow(QMainWindow):
         self._lbl_file.setObjectName("lblFile")
         self._lbl_file.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root_layout.addWidget(self._lbl_file)
+
+        # --- Slider bar (Progress) ---
+        slider_layout = QHBoxLayout()
+        slider_layout.setSpacing(10)
+        
+        self._slider = QSlider(Qt.Orientation.Horizontal)
+        self._slider.setEnabled(False)
+        self._slider.sliderPressed.connect(self._on_slider_pressed)
+        self._slider.sliderReleased.connect(self._on_slider_released)
+        self._slider.valueChanged.connect(self._on_slider_moved)
+        slider_layout.addWidget(self._slider, stretch=1)
+        
+        self._lbl_time = QLabel("00:00 / 00:00")
+        self._lbl_time.setObjectName("lblTime")
+        self._lbl_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        slider_layout.addWidget(self._lbl_time)
+        
+        root_layout.addLayout(slider_layout)
 
         # --- Control bar ---
         ctrl_layout = QHBoxLayout()
@@ -217,17 +272,27 @@ class MainWindow(QMainWindow):
             self._processor.stop_playback()
             self._is_playing = False
 
-        ok, w, h, fps = self._processor.load_video(path)
+        ok, w, h, fps, total_frames = self._processor.load_video(path)
         if ok:
             self._video_loaded = True
+            self._total_frames = total_frames
+            self._fps = fps if fps > 0 else 30.0
+            
             self._video_widget.clear_display()
             filename = os.path.basename(path)
             self._lbl_file.setText(f"📎 {filename}   ({w}×{h}, {fps:.1f} FPS)")
             self._status_bar.showMessage(f"Video caricato: {filename}")
             self._btn_play_pause.setText("▶  Play")
+            
+            # Setup slider
+            self._slider.setRange(0, total_frames)
+            self._slider.setValue(0)
+            self._update_time_label(0)
         else:
             self._video_loaded = False
             self._status_bar.showMessage("Errore: impossibile aprire il video.")
+            self._slider.setRange(0, 0)
+            self._lbl_time.setText("00:00 / 00:00")
 
         self._update_button_states()
 
@@ -242,7 +307,10 @@ class MainWindow(QMainWindow):
             self._btn_play_pause.setText("▶  Play")
             self._status_bar.showMessage("In pausa")
         else:
-            # Play
+            # Play (se siamo alla fine, riavvolgiamo)
+            if self._slider.value() >= self._total_frames:
+                self._processor.set_position(0)
+                
             self._processor.play()
             self._is_playing = True
             self._btn_play_pause.setText("⏸  Pausa")
@@ -255,8 +323,9 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._video_widget.clear_display()
         self._btn_play_pause.setText("▶  Play")
-        self._video_loaded = False
-        self._lbl_file.setText("Nessun file selezionato")
+        self._slider.setValue(0)
+        self._update_time_label(0)
+        self._processor.set_position(0)
         self._status_bar.showMessage("Riproduzione fermata")
         self._update_button_states()
 
@@ -266,7 +335,7 @@ class MainWindow(QMainWindow):
     def _on_playback_finished(self) -> None:
         self._is_playing = False
         self._btn_play_pause.setText("▶  Play")
-        self._video_loaded = False
+        self._slider.setValue(self._total_frames)
         self._status_bar.showMessage("Riproduzione terminata")
         self._update_button_states()
 
@@ -279,13 +348,51 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage(f"⚠️ Errore: {message}")
         self._update_button_states()
 
+    # --- Slider Events ---
+
+    def _on_position_changed(self, frame_idx: int) -> None:
+        """Ricevuto dal thread: aggiorna lo slider se l'utente non lo sta trascinando."""
+        if not self._slider_pressed:
+            # Blocchiamo i segnali per evitare loop ricorsivi con valueChanged
+            self._slider.blockSignals(True)
+            self._slider.setValue(frame_idx)
+            self._slider.blockSignals(False)
+            self._update_time_label(frame_idx)
+
+    def _on_slider_pressed(self) -> None:
+        """L'utente ha iniziato a trascinare."""
+        self._slider_pressed = True
+
+    def _on_slider_released(self) -> None:
+        """L'utente ha rilasciato lo slider (effettua il vero e proprio seek)."""
+        self._slider_pressed = False
+        self._processor.set_position(self._slider.value())
+
+    def _on_slider_moved(self, value: int) -> None:
+        """Lo slider viene mosso dinamicamente (aggiorna la label in tempo reale)."""
+        self._update_time_label(value)
+
+    def _update_time_label(self, current_frame: int) -> None:
+        """Formatta M:S e aggiorna la label del tempo."""
+        if self._fps <= 0:
+            return
+            
+        cur_sec = int(current_frame / self._fps)
+        tot_sec = int(self._total_frames / self._fps)
+        
+        cur_m, cur_s = divmod(cur_sec, 60)
+        tot_m, tot_s = divmod(tot_sec, 60)
+        
+        self._lbl_time.setText(f"{cur_m:02d}:{cur_s:02d} / {tot_m:02d}:{tot_s:02d}")
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _update_button_states(self) -> None:
         self._btn_play_pause.setEnabled(self._video_loaded)
-        self._btn_stop.setEnabled(self._is_playing)
+        self._btn_stop.setEnabled(self._is_playing or self._slider.value() > 0)
+        self._slider.setEnabled(self._video_loaded)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         """Rilascia le risorse quando la finestra viene chiusa."""
