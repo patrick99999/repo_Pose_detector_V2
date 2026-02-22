@@ -109,13 +109,17 @@ class VideoProcessor(QThread):
             return
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        frame_delay = 1.0 / fps
-
+        # Limitiamo gli FPS a massimo 30 per migliorare le performance
+        target_fps = min(fps, 30.0)
+        frame_delay = 1.0 / target_fps
+        frame_skip_ratio = fps / target_fps if fps > target_fps else 1.0
+        
         # Creo il detector qui, sullo stesso thread in cui verrà usato.
         # MediaPipe PoseLandmarker NON è thread-safe.
         detector = PoseDetector()
 
         try:
+            frame_count = 0
             while cap.isOpened():
                 # Controlla stop
                 with QMutexLocker(self._mutex):
@@ -130,17 +134,35 @@ class VideoProcessor(QThread):
 
                 t_start = time.perf_counter()
 
+                # Saltiamo i frame in eccesso se il video originale ha più di 30 fps
+                frames_to_read = max(1, int(frame_count * frame_skip_ratio) - int((frame_count - 1) * frame_skip_ratio))
+                for _ in range(frames_to_read - 1):
+                    cap.read()  # Scarta i frame veloci
+                
                 ret, frame = cap.read()
+                frame_count += 1
+                
                 if not ret:
                     # Il video è finito
                     self.playback_finished.emit()
                     break
 
-                # Elabora il frame con il PoseDetector
-                annotated, _ = detector.process_frame(frame, fps=fps)
+                # --- 1. OTTIMIZZAZIONE: Riduzione Risoluzione ---
+                # Ridimensioniamo il frame a una larghezza massima di 640px
+                # Questo migliora enormemente le performance di MediaPipe Lite 
+                # e la stabilità dei landmark
+                MAX_WIDTH = 640
+                h, w = frame.shape[:2]
+                if w > MAX_WIDTH:
+                    ratio = MAX_WIDTH / w
+                    new_h = int(h * ratio)
+                    frame = cv2.resize(frame, (MAX_WIDTH, new_h), interpolation=cv2.INTER_AREA)
+
+                # Elabora il frame con il PoseDetector passando il target_fps
+                annotated, _ = detector.process_frame(frame, fps=target_fps)
                 self.frame_ready.emit(annotated)
 
-                # Mantieni il framerate originale
+                # Mantieni il framerate originale target
                 elapsed = time.perf_counter() - t_start
                 sleep_time = frame_delay - elapsed
                 if sleep_time > 0:
