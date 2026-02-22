@@ -137,6 +137,7 @@ class MainWindow(QMainWindow):
         self._processor.frame_ready.connect(self._on_frame_ready)
         self._processor.playback_finished.connect(self._on_playback_finished)
         self._processor.fps_updated.connect(self._on_fps_updated)
+        self._processor.error_occurred.connect(self._on_error)
 
         # --- UI ---
         self._build_ui()
@@ -271,6 +272,12 @@ class MainWindow(QMainWindow):
 
     def _on_fps_updated(self, fps: float) -> None:
         self._status_bar.showMessage(f"Riproduzione in corso… | {fps:.1f} FPS")
+
+    def _on_error(self, message: str) -> None:
+        self._is_playing = False
+        self._btn_play_pause.setText("▶  Play")
+        self._status_bar.showMessage(f"⚠️ Errore: {message}")
+        self._update_button_states()
 
     # ------------------------------------------------------------------
     # Helpers
