@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QPushButton,
     QLabel,
     QFileDialog,
@@ -228,32 +229,48 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(lbl_sidebar_title)
         
         self._angle_labels = {}
-        angles_to_track = [
-            ("Ginocchio", "Stinco rispetto al femorale"),
-            ("Anca", "Femorale rispetto al busto"),
-            ("Spalla", "Busto rispetto all'omero"),
-            ("Gomito", "Omero rispetto all'avambraccio")
-        ]
+        joints = ["Ginocchio", "Anca", "Spalla", "Gomito"]
         
-        for name, desc in angles_to_track:
-            container = QWidget()
-            vbox = QVBoxLayout(container)
-            vbox.setContentsMargins(0, 0, 0, 0)
-            vbox.setSpacing(4)
+        grid = QGridLayout()
+        grid.setSpacing(12)
+        grid.setColumnStretch(1, 1)
+        grid.setColumnStretch(2, 1)
+        
+        # Headers (Row 0)
+        lbl_sx = QLabel("SX")
+        lbl_sx.setStyleSheet("color: #8bb3a0; font-weight: bold; font-size: 11px;")
+        lbl_sx.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        lbl_dx = QLabel("DX")
+        lbl_dx.setStyleSheet("color: #8bb3a0; font-weight: bold; font-size: 11px;")
+        lbl_dx.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        grid.addWidget(lbl_sx, 0, 1)
+        grid.addWidget(lbl_dx, 0, 2)
+        
+        for row, joint in enumerate(joints, start=1):
+            # Nome articolazione
+            lbl_joint = QLabel(joint)
+            lbl_joint.setStyleSheet("color: #b0b0b0; font-size: 13px; font-weight: bold;")
+            grid.addWidget(lbl_joint, row, 0)
             
-            lbl_desc = QLabel(f"{name}\n({desc})")
-            lbl_desc.setStyleSheet("color: #b0b0b0; font-size: 11px;")
-            lbl_desc.setWordWrap(True)
+            # Valore SX
+            name_sx = f"{joint} Sx"
+            lbl_val_sx = QLabel("- °")
+            lbl_val_sx.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+            lbl_val_sx.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            grid.addWidget(lbl_val_sx, row, 1)
+            self._angle_labels[name_sx] = lbl_val_sx
             
-            lbl_val = QLabel("- °")
-            lbl_val.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: bold;")
-            lbl_val.setAlignment(Qt.AlignmentFlag.AlignRight)
-            
-            vbox.addWidget(lbl_desc)
-            vbox.addWidget(lbl_val)
-            sidebar_layout.addWidget(container)
-            
-            self._angle_labels[name] = lbl_val
+            # Valore DX
+            name_dx = f"{joint} Dx"
+            lbl_val_dx = QLabel("- °")
+            lbl_val_dx.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: bold;")
+            lbl_val_dx.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            grid.addWidget(lbl_val_dx, row, 2)
+            self._angle_labels[name_dx] = lbl_val_dx
+
+        sidebar_layout.addLayout(grid)
             
         sidebar_layout.addStretch()
         main_layout.addWidget(sidebar)
