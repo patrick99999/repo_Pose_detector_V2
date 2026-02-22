@@ -175,6 +175,7 @@ class MainWindow(QMainWindow):
         self._processor.fps_updated.connect(self._on_fps_updated)
         self._processor.error_occurred.connect(self._on_error)
         self._processor.position_changed.connect(self._on_position_changed)
+        self._processor.angles_updated.connect(self._on_angles_updated)
 
         # --- UI ---
         self._build_ui()
@@ -199,9 +200,69 @@ class MainWindow(QMainWindow):
         lbl_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root_layout.addWidget(lbl_title)
 
-        # --- Video Widget ---
+        # --- Main Layout (Sidebar + Video) ---
+        main_layout = QHBoxLayout()
+        main_layout.setSpacing(16)
+        
+        # -- Sidebar (Angoli) --
+        sidebar = QWidget()
+        sidebar.setFixedWidth(240)
+        sidebar.setStyleSheet("""
+            QWidget {
+                background-color: #1a1a1a;
+                border-radius: 8px;
+                border: 1px solid #2a2a2a;
+            }
+            QLabel {
+                border: none;
+                background-color: transparent;
+            }
+        """)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(16, 16, 16, 16)
+        sidebar_layout.setSpacing(12)
+        
+        lbl_sidebar_title = QLabel("📐 Angoli Articolazioni")
+        lbl_sidebar_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #5a9cf5; border-bottom: 1px solid #333; padding-bottom: 8px;")
+        lbl_sidebar_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sidebar_layout.addWidget(lbl_sidebar_title)
+        
+        self._angle_labels = {}
+        angles_to_track = [
+            ("Ginocchio", "Stinco rispetto al femorale"),
+            ("Anca", "Femorale rispetto al busto"),
+            ("Spalla", "Busto rispetto all'omero"),
+            ("Gomito", "Omero rispetto all'avambraccio")
+        ]
+        
+        for name, desc in angles_to_track:
+            container = QWidget()
+            vbox = QVBoxLayout(container)
+            vbox.setContentsMargins(0, 0, 0, 0)
+            vbox.setSpacing(4)
+            
+            lbl_desc = QLabel(f"{name}\n({desc})")
+            lbl_desc.setStyleSheet("color: #b0b0b0; font-size: 11px;")
+            lbl_desc.setWordWrap(True)
+            
+            lbl_val = QLabel("- °")
+            lbl_val.setStyleSheet("color: #ffffff; font-size: 18px; font-weight: bold;")
+            lbl_val.setAlignment(Qt.AlignmentFlag.AlignRight)
+            
+            vbox.addWidget(lbl_desc)
+            vbox.addWidget(lbl_val)
+            sidebar_layout.addWidget(container)
+            
+            self._angle_labels[name] = lbl_val
+            
+        sidebar_layout.addStretch()
+        main_layout.addWidget(sidebar)
+
+        # -- Video Widget --
         self._video_widget = VideoWidget()
-        root_layout.addWidget(self._video_widget, stretch=1)
+        main_layout.addWidget(self._video_widget, stretch=1)
+        
+        root_layout.addLayout(main_layout, stretch=1)
 
         # --- File info ---
         self._lbl_file = QLabel("Nessun file selezionato")
@@ -326,6 +387,7 @@ class MainWindow(QMainWindow):
         self._slider.setValue(0)
         self._update_time_label(0)
         self._processor.set_position(0)
+        self._clear_angles()
         self._status_bar.showMessage("Riproduzione fermata")
         self._update_button_states()
 
@@ -336,6 +398,7 @@ class MainWindow(QMainWindow):
         self._is_playing = False
         self._btn_play_pause.setText("▶  Play")
         self._slider.setValue(self._total_frames)
+        self._clear_angles()
         self._status_bar.showMessage("Riproduzione terminata")
         self._update_button_states()
 
@@ -347,6 +410,19 @@ class MainWindow(QMainWindow):
         self._btn_play_pause.setText("▶  Play")
         self._status_bar.showMessage(f"⚠️ Errore: {message}")
         self._update_button_states()
+
+    def _on_angles_updated(self, angles: dict) -> None:
+        """Ricevuto dal thread: aggiorna i valori degli angoli nella sidebar."""
+        for name, label in self._angle_labels.items():
+            if name in angles:
+                label.setText(f"{angles[name]:.1f}°")
+            else:
+                label.setText("- °")
+                
+    def _clear_angles(self) -> None:
+        """Reimposta i testi degli angoli a vuoto."""
+        for label in self._angle_labels.values():
+            label.setText("- °")
 
     # --- Slider Events ---
 

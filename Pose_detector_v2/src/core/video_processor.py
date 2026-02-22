@@ -28,6 +28,7 @@ class VideoProcessor(QThread):
     fps_updated = pyqtSignal(float)
     error_occurred = pyqtSignal(str)
     position_changed = pyqtSignal(int)  # Emesso con l'indice del frame corrente
+    angles_updated = pyqtSignal(dict)   # Emesso con gli angoli {nome: valore_gradi}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -174,8 +175,10 @@ class VideoProcessor(QThread):
                     frame = cv2.resize(frame, (MAX_WIDTH, new_h), interpolation=cv2.INTER_AREA)
 
                 # Elabora il frame con il PoseDetector passando il target_fps
-                annotated, _ = detector.process_frame(frame, fps=target_fps)
+                annotated, _, angles = detector.process_frame(frame, fps=target_fps)
                 self.frame_ready.emit(annotated)
+                if angles:
+                    self.angles_updated.emit(angles)
 
                 # Mantieni il framerate originale target
                 elapsed = time.perf_counter() - t_start

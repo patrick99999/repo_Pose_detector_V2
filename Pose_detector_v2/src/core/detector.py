@@ -19,6 +19,8 @@ from mediapipe.tasks.python.vision import (
     drawing_styles,
 )
 
+from core.utils import calculate_angle
+
 
 # Percorso di default del modello (relativo alla root del progetto)
 _DEFAULT_MODEL_PATH = os.path.join(
@@ -59,8 +61,8 @@ class PoseDetector:
     # Public API
     # ------------------------------------------------------------------
 
-    def process_frame(self, frame: np.ndarray, fps: float = 30.0) -> tuple[np.ndarray, object]:
-        """Elabora un frame BGR e restituisce (frame_annotato, results).
+    def process_frame(self, frame: np.ndarray, fps: float = 30.0) -> tuple[np.ndarray, object, dict]:
+        """Elabora un frame BGR e restituisce (frame_annotato, results, angles).
 
         Args:
             frame: immagine BGR (OpenCV).
@@ -69,6 +71,7 @@ class PoseDetector:
         Returns:
             frame_out: copia del frame con i landmark disegnati.
             results: PoseLandmarkerResult.
+            angles: dict con gli angoli {nome: valore}.
         """
         self._ensure_initialized()
 
@@ -79,6 +82,8 @@ class PoseDetector:
         # Incrementa il timestamp in base al vero FPS del video
         self._frame_timestamp_ms += int(1000.0 / fps)
         results = self._landmarker.detect_for_video(mp_image, self._frame_timestamp_ms)
+
+        angles = {}
 
         # Disegna i landmark sul frame originale (BGR)
         frame_out = frame.copy()
@@ -95,8 +100,37 @@ class PoseDetector:
                         color=(255, 255, 0), thickness=2
                     ),
                 )
+                
+                # Estrazione angoli (usiamo il lato sinistro come default, indici dispari)
+                # Left Shoulder = 11, Left Elbow = 13, Left Wrist = 15
+                # Left Hip = 23, Left Knee = 25, Left Ankle = 27
+                try:
+                    def get_coords(idx):
+                        lm = pose_landmarks[idx]
+                        return (lm.x, lm.y)
+                        
+                    l_sh = get_coords(11)
+                    l_el = get_coords(13)
+                    l_wr = get_coords(15)
+                    l_hi = get_coords(23)
+                    l_kn = get_coords(25)
+                    l_an = get_coords(27)
+                    
+                    # 1. Stinco rispetto al femorale (Angolo Ginocchio: Hip - Knee - Ankle)
+                    angles["Ginocchio"] = calculate_angle(l_hi, l_kn, l_an)
+                    
+                    # 2. Femorale rispetto al busto (Angolo Anca/Bacino: Shoulder - Hip - Knee)
+                    angles["Anca"] = calculate_angle(l_sh, l_hi, l_kn)
+                    
+                    # 3. Busto rispetto all'omero (Angolo Spalla: Hip - Shoulder - Elbow)
+                    angles["Spalla"] = calculate_angle(l_hi, l_sh, l_el)
+                    
+                    # 4. Omero rispetto all'avambraccio (Angolo Gomito: Shoulder - Elbow - Wrist)
+                    angles["Gomito"] = calculate_angle(l_sh, l_el, l_wr)
+                except IndexError:
+                    pass # Landmark mancanti
 
-        return frame_out, results
+        return frame_out, results, angles
 
     def reset(self) -> None:
         """Chiude e ricrea il landmarker per una nuova sessione video."""
